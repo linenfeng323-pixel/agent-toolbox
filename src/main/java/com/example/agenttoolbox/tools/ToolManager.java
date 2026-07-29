@@ -69,6 +69,9 @@ public class ToolManager {
         // 注册技能知识读取工具（始终可用，skill 内部懒加载）
         registerTool(new SkillReadTool());
 
+        // 注册 GitHub Actions 编译工具（让 AI 能触发云端编译/查日志，实现循环修 bug 直到编译成功）
+        registerTool(new GithubCompileTool(context));
+
         // 注册计划创建工具（标准 MCP tools/call 形式，替代在 content 里塞转义 JSON）
         registerTool(new PlanCreateTool());
 

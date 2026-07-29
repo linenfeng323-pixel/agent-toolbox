@@ -393,6 +393,12 @@ public class McpServer {
         private void handleGetRequest(String path, OutputStream out) throws IOException {
             log("GET请求: " + path);
 
+            // /api/github/config 直接返回当前 GitHub 配置（不返回 token 明文）
+            if ("/api/github/config".equals(path)) {
+                handleGithubRequest(path, "", out);
+                return;
+            }
+
             String fileName;
             String contentType;
 
@@ -568,7 +574,14 @@ public class McpServer {
                 handleChatRequest(path, requestBody, out);
                 return;
             }
-            
+
+            // 优先处理 /api/github/ 路径（GitHub Actions 云端编译相关）
+            if (path.startsWith("/api/github/")) {
+                log("[REQ] " + path);
+                handleGithubRequest(path, requestBody, out);
+                return;
+            }
+
             // 对于非 chat 路径，检查是否为空 JSON 对象
             if ("{}".equals(trimmedBody)) {
                 // 空 JSON 对象（可能由删除控制字符后产生），无法处理，返回 400 Bad Request
@@ -2061,6 +2074,297 @@ public class McpServer {
                 "\r\n" +
                 responseBody;
             out.write(response.getBytes("UTF-8"));
+        }
+
+        /**
+         * 处理 /api/github/* 接口 - 把 GitHub Actions 编译能力暴露给前端
+         * <p>
+         * 支持的接口：
+         *   GET  /api/github/config                 - 读取当前配置（token 脱敏）
+         *   POST /api/github/config                 - 保存配置（token/owner/repo/api_base/workflow_id）
+         *   POST /api/github/test                   - 测试 Token 是否可用
+         *   POST /api/github/repos                  - 拉取我的仓库列表
+         *   POST /api/github/check_workflow          - 检查指定仓库是否配置了 workflow
+         *   POST /api/github/trigger                - 触发 workflow 编译
+         *   POST /api/github/status                 - 查询最近一次运行状态
+         *   POST /api/github/logs                   - 获取最近一次运行的编译日志
+         *   POST /api/github/apk                    - 获取最新 APK 下载链接
+         */
+        private void handleGithubRequest(String path, String requestBody, OutputStream out) throws IOException {
+            String responseBody;
+            try {
+                JSONObject body = (requestBody != null && requestBody.length() > 2)
+                    ? new JSONObject(requestBody) : new JSONObject();
+                String action = path;
+                if (action.endsWith("/")) action = action.substring(0, action.length() - 1);
+
+                com.example.agenttoolbox.GithubApiClient client =
+                    new com.example.agenttoolbox.GithubApiClient(context);
+
+                if ("/api/github/config".equals(action)) {
+                    // 读取当前配置（token 脱敏，只显示前 8 位和后 4 位）
+                    String token = com.example.agenttoolbox.GithubConfigManager.getToken(context);
+                    String masked = "";
+                    if (token != null && token.length() > 12) {
+                        masked = token.substring(0, 8) + "****" + token.substring(token.length() - 4);
+                    } else if (token != null && !token.isEmpty()) {
+                        masked = "****";
+                    }
+                    responseBody = new JSONObject()
+                        .put("success", true)
+                        .put("token_masked", masked)
+                        .put("token_set", !token.isEmpty())
+                        .put("owner", com.example.agenttoolbox.GithubConfigManager.getOwner(context))
+                        .put("repo", com.example.agenttoolbox.GithubConfigManager.getRepo(context))
+                        .put("full_repo", com.example.agenttoolbox.GithubConfigManager.getFullRepo(context))
+                        .put("api_base", com.example.agenttoolbox.GithubConfigManager.getApiBase(context))
+                        .put("workflow_id", com.example.agenttoolbox.GithubConfigManager.getWorkflowId(context))
+                        .put("configured", com.example.agenttoolbox.GithubConfigManager.isFullyConfigured(context))
+                        .toString();
+
+                } else if ("/api/github/test".equals(action)) {
+                    String token = body.optString("token", "");
+                    if (!token.isEmpty()) {
+                        com.example.agenttoolbox.GithubConfigManager.setToken(context, token);
+                    }
+                    responseBody = blockingGithubCall(client, "test");
+
+                } else if ("/api/github/repos".equals(action)) {
+                    responseBody = blockingGithubCall(client, "repos");
+
+                } else if ("/api/github/check_workflow".equals(action)) {
+                    final String owner = body.optString("owner",
+                        com.example.agenttoolbox.GithubConfigManager.getOwner(context));
+                    final String repo = body.optString("repo",
+                        com.example.agenttoolbox.GithubConfigManager.getRepo(context));
+                    if (owner.isEmpty() || repo.isEmpty()) {
+                        responseBody = new JSONObject()
+                            .put("success", false)
+                            .put("error", "缺少 owner 或 repo").toString();
+                    } else {
+                        responseBody = blockingGithubCallWorkflow(client, owner, repo);
+                    }
+
+                } else if ("/api/github/trigger".equals(action)) {
+                    // 保存配置（如果请求体带了配置）
+                    applyConfigFromBody(body);
+                    final String ref = body.optString("ref", "main");
+                    final String wfId = body.optString("workflow_id", "");
+                    responseBody = blockingGithubCallTrigger(client, ref, wfId);
+
+                } else if ("/api/github/status".equals(action)) {
+                    applyConfigFromBody(body);
+                    responseBody = blockingGithubCall(client, "status");
+
+                } else if ("/api/github/logs".equals(action)) {
+                    applyConfigFromBody(body);
+                    responseBody = blockingGithubCall(client, "logs");
+
+                } else if ("/api/github/apk".equals(action)) {
+                    applyConfigFromBody(body);
+                    responseBody = blockingGithubCall(client, "apk");
+
+                } else if ("/api/github/save".equals(action)) {
+                    // 保存配置（不测试）
+                    applyConfigFromBody(body);
+                    responseBody = new JSONObject()
+                        .put("success", true)
+                        .put("message", "配置已保存")
+                        .put("configured", com.example.agenttoolbox.GithubConfigManager.isFullyConfigured(context))
+                        .toString();
+
+                } else {
+                    responseBody = new JSONObject()
+                        .put("success", false)
+                        .put("error", "未知 github 接口: " + action)
+                        .put("supported", new String[]{
+                            "/api/github/config", "/api/github/save", "/api/github/test",
+                            "/api/github/repos", "/api/github/check_workflow",
+                            "/api/github/trigger", "/api/github/status",
+                            "/api/github/logs", "/api/github/apk"
+                        })
+                        .toString();
+                }
+            } catch (Exception e) {
+                log("[GITHUB] 接口异常: " + e.getMessage());
+                try {
+                    responseBody = new JSONObject()
+                        .put("success", false)
+                        .put("error", e.getMessage() != null ? e.getMessage() : "Unknown error")
+                        .toString();
+                } catch (JSONException je) {
+                    responseBody = "{\"success\":false,\"error\":\"Internal error\"}";
+                }
+            }
+
+            log("[GITHUB] 响应: " + (responseBody.length() > 500 ? responseBody.substring(0, 500) + "..." : responseBody));
+            String response = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: " + responseBody.getBytes("UTF-8").length + "\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n" +
+                "Access-Control-Allow-Headers: Content-Type\r\n" +
+                "\r\n" +
+                responseBody;
+            out.write(response.getBytes("UTF-8"));
+        }
+
+        /** 把请求体里的配置字段应用到 GithubConfigManager */
+        private void applyConfigFromBody(JSONObject body) {
+            if (body == null) return;
+            if (body.has("token")) {
+                String t = body.optString("token", "");
+                if (!t.isEmpty()) com.example.agenttoolbox.GithubConfigManager.setToken(context, t);
+            }
+            if (body.has("owner")) {
+                com.example.agenttoolbox.GithubConfigManager.setOwner(context, body.optString("owner", ""));
+            }
+            if (body.has("repo")) {
+                com.example.agenttoolbox.GithubConfigManager.setRepo(context, body.optString("repo", ""));
+            }
+            if (body.has("full_repo")) {
+                com.example.agenttoolbox.GithubConfigManager.setFullRepo(context, body.optString("full_repo", ""));
+            }
+            if (body.has("api_base")) {
+                com.example.agenttoolbox.GithubConfigManager.setApiBase(context, body.optString("api_base", ""));
+            }
+            if (body.has("workflow_id")) {
+                com.example.agenttoolbox.GithubConfigManager.setWorkflowId(context, body.optString("workflow_id", ""));
+            }
+        }
+
+        /** 同步阻塞调用 GitHub API（把异步回调转为同步等待，最长 90 秒） */
+        private String blockingGithubCall(com.example.agenttoolbox.GithubApiClient client, String op) {
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final java.util.concurrent.atomic.AtomicReference<String> resultRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+            final java.util.concurrent.atomic.AtomicReference<String> errRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+
+            com.example.agenttoolbox.GithubApiClient.Callback cb =
+                new com.example.agenttoolbox.GithubApiClient.Callback() {
+                    @Override public void onSuccess(String result) { resultRef.set(result); latch.countDown(); }
+                    @Override public void onError(String error) { errRef.set(error); latch.countDown(); }
+                };
+
+            if ("test".equals(op)) client.testToken(cb);
+            else if ("repos".equals(op)) client.listMyRepos(cb);
+            else if ("status".equals(op)) client.getLatestRunStatus(cb);
+            else if ("logs".equals(op)) client.getLatestRunLogs(cb);
+            else if ("apk".equals(op)) client.getLatestArtifact(cb);
+            else {
+                return "{\"success\":false,\"error\":\"unknown op: " + op + "\"}";
+            }
+
+            try {
+                if (!latch.await(90, java.util.concurrent.TimeUnit.SECONDS)) {
+                    return "{\"success\":false,\"error\":\"GitHub API 调用超时（90s）\"}";
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return "{\"success\":false,\"error\":\"GitHub API 调用被中断\"}";
+            }
+
+            String err = errRef.get();
+            if (err != null) {
+                try {
+                    return new JSONObject().put("success", false).put("error", err).toString();
+                } catch (JSONException e) {
+                    return "{\"success\":false,\"error\":\"" + escapeJson(err) + "\"}";
+                }
+            }
+            String result = resultRef.get();
+            try {
+                // result 可能是普通文本，包到 data 字段里
+                return new JSONObject().put("success", true).put("data", result).toString();
+            } catch (JSONException e) {
+                return "{\"success\":true,\"data\":\"" + escapeJson(result) + "\"}";
+            }
+        }
+
+        /** 触发编译的同步阻塞调用 */
+        private String blockingGithubCallTrigger(com.example.agenttoolbox.GithubApiClient client,
+                                                 String ref, String wfId) {
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final java.util.concurrent.atomic.AtomicReference<String> resultRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+            final java.util.concurrent.atomic.AtomicReference<String> errRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+
+            client.triggerWorkflow(ref, wfId, new com.example.agenttoolbox.GithubApiClient.Callback() {
+                @Override public void onSuccess(String result) { resultRef.set(result); latch.countDown(); }
+                @Override public void onError(String error) { errRef.set(error); latch.countDown(); }
+            });
+
+            try {
+                if (!latch.await(90, java.util.concurrent.TimeUnit.SECONDS)) {
+                    return "{\"success\":false,\"error\":\"触发编译超时（90s）\"}";
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return "{\"success\":false,\"error\":\"触发编译被中断\"}";
+            }
+
+            String err = errRef.get();
+            if (err != null) {
+                try {
+                    return new JSONObject().put("success", false).put("error", err).toString();
+                } catch (JSONException e) {
+                    return "{\"success\":false,\"error\":\"" + escapeJson(err) + "\"}";
+                }
+            }
+            String result = resultRef.get();
+            try {
+                return new JSONObject().put("success", true).put("data", result).toString();
+            } catch (JSONException e) {
+                return "{\"success\":true,\"data\":\"" + escapeJson(result) + "\"}";
+            }
+        }
+
+        /** 检查 workflow 的同步阻塞调用 */
+        private String blockingGithubCallWorkflow(com.example.agenttoolbox.GithubApiClient client,
+                                                  String owner, String repo) {
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final java.util.concurrent.atomic.AtomicReference<String> resultRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+            final java.util.concurrent.atomic.AtomicReference<String> errRef =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+
+            client.checkWorkflow(owner, repo, new com.example.agenttoolbox.GithubApiClient.Callback() {
+                @Override public void onSuccess(String result) { resultRef.set(result); latch.countDown(); }
+                @Override public void onError(String error) { errRef.set(error); latch.countDown(); }
+            });
+
+            try {
+                if (!latch.await(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                    return "{\"success\":false,\"error\":\"检查 workflow 超时（60s）\"}";
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return "{\"success\":false,\"error\":\"检查 workflow 被中断\"}";
+            }
+
+            String err = errRef.get();
+            if (err != null) {
+                try {
+                    return new JSONObject().put("success", false).put("error", err).toString();
+                } catch (JSONException e) {
+                    return "{\"success\":false,\"error\":\"" + escapeJson(err) + "\"}";
+                }
+            }
+            String result = resultRef.get();
+            try {
+                return new JSONObject().put("success", true).put("data", result).toString();
+            } catch (JSONException e) {
+                return "{\"success\":true,\"data\":\"" + escapeJson(result) + "\"}";
+            }
+        }
+
+        /** 简单 JSON 字符串转义（fallback 用） */
+        private String escapeJson(String s) {
+            if (s == null) return "";
+            return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
         }
 
         private void handleOptionsRequest(OutputStream out) throws IOException {

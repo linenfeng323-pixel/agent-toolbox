@@ -737,10 +737,10 @@ public class DeepSeekActivity extends Activity {
             AppLogger.d("DeepSeekActivity", "loadDeepSeek: 已加载过，跳过重新 loadUrl");
             return;
         }
-        // 从 SharedPreferences 读取自定义 URL
-        SharedPreferences prefs = getSharedPreferences("mcp_config", MODE_PRIVATE);
-        deepSeekUrl = prefs.getString("deepseek_url", DEFAULT_DEEPSEEK_URL);
-        setStatus("正在加载 DeepSeek...");
+        // 从 AiPlatformManager 读取当前选择的 AI 平台 URL（支持豆包/通义/Kimi 等多平台切换）
+        deepSeekUrl = AiPlatformManager.getCurrentUrl(this);
+        String platformName = AiPlatformManager.getCurrentName(this);
+        setStatus("正在加载 " + platformName + "...");
         tvLoginStatus.setText("检测中...");
         webView.loadUrl(deepSeekUrl);
     }

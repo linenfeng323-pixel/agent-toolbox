@@ -182,6 +182,37 @@ public class DeepSeekChatBridge {
     public synchronized boolean isRegistered() { return boundWebView != null; }
     public synchronized boolean isWebViewLoaded() { return webViewLoaded && boundWebView != null; }
     public synchronized void markAsLoaded() { this.webViewLoaded = true; }
+    /** 重置加载标记（切换 AI 平台时调用，强制下次重新 loadUrl 加载新平台） */
+    public synchronized void resetLoaded() {
+        this.webViewLoaded = false;
+        this.deepseekInitialized = false;
+        AppLogger.d("DeepSeekChatBridge", "已重置 WebView loaded 标记");
+    }
+    /** 销毁已绑定的 WebView（切换平台时调用，确保完全重新创建） */
+    public synchronized void destroyBoundWebView() {
+        if (boundWebView != null) {
+            try {
+                boundWebView.stopLoading();
+                boundWebView.loadUrl("about:blank");
+                boundWebView.clearHistory();
+                boundWebView.removeAllViews();
+                android.view.ViewGroup parent = (android.view.ViewGroup) boundWebView.getParent();
+                if (parent != null) parent.removeView(boundWebView);
+                boundWebView.destroy();
+            } catch (Exception e) {
+                AppLogger.w("DeepSeekChatBridge", "销毁旧 WebView 失败: " + e.getMessage());
+            }
+            boundWebView = null;
+        }
+        this.webViewLoaded = false;
+        this.deepseekInitialized = false;
+        this.mcpWebViewLoaded = false;
+        callbacksById.clear();
+        latchById.clear();
+        replyById.clear();
+        errorById.clear();
+        AppLogger.d("DeepSeekChatBridge", "已销毁旧 WebView 并重置状态");
+    }
 
     // ---- MCP 工具箱 WebView 管理（跨 Activity 保持） ----
     public synchronized void registerMcpWebView(WebView wv) {

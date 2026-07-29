@@ -228,11 +228,56 @@
                 android:id="@+id/btnDeepSeek"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
-                android:text="打开 DeepSeek 助手"
+                android:text="🤖 DeepSeek 助手"
                 android:textColor="@color/accent"
                 android:textSize="15sp"
                 android:textStyle="bold"
                 android:background="@drawable/card_bg"
+                android:layout_marginBottom="8dp"
+                android:stateListAnimator="@null" />
+
+            <Button
+                android:id="@+id/btnAiPlatform"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:text="🔄 切换 AI 平台"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:background="@drawable/card_bg"
+                android:layout_marginBottom="8dp"
+                android:stateListAnimator="@null" />
+
+            <Button
+                android:id="@+id/btnGithub"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:text="⚙️ GitHub 配置 (Token)"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:background="@drawable/card_bg"
+                android:layout_marginBottom="8dp"
+                android:stateListAnimator="@null" />
+
+            <Button
+                android:id="@+id/btnMyRepos"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:text="📂 我的仓库 (选择自动配置)"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:background="@drawable/card_bg"
+                android:layout_marginBottom="8dp"
+                android:stateListAnimator="@null" />
+
+            <Button
+                android:id="@+id/btnCompile"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="🚀 一键编译 APK"
+                android:textColor="@color/text_inverse"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:background="@drawable/btn_primary"
                 android:stateListAnimator="@null" />
         </LinearLayout>
 
