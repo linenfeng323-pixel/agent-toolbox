@@ -26,6 +26,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.LinearLayout;
 import android.widget.CheckBox;
+import android.app.AlertDialog;
+import android.text.InputType;
 
 import com.example.agenttoolbox.AppLogger;
 import com.example.agenttoolbox.mcp.McpServer;
